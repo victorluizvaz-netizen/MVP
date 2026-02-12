@@ -63,7 +63,7 @@ def render(workspace_id: int, user_id: int):
     st.subheader("Gerar a partir da transcrição")
     ct = st.selectbox("Tipo", CONTENT_TYPES, key="tr_type")
     n = st.number_input("Quantidade", 1, 20, 3, 1, key="tr_n")
-    model = st.selectbox("Modelo (Groq)", ["llama-3.1-70b-versatile","llama-3.1-8b-instant"], index=0, key="tr_model")
+    model = st.selectbox("Modelo (Groq)",["groq-1.5-1-mini", "groq-1.5-1-base", "groq-1.5-1-large"],index=1)
     extra = st.text_area("Extra", height=90, key="tr_extra")
 
     if st.button("Gerar", type="primary", key="tr_gen"):
