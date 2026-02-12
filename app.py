@@ -20,13 +20,22 @@ if "user" not in st.session_state:
     st.session_state["user"] = None
 if "workspace" not in st.session_state:
     st.session_state["workspace"] = None
-
-# restore cookie login
+    
+# cookie bootstrap (evita deslogar no refresh quando CookieManager ainda não carregou)
+if "cookie_bootstrap" not in st.session_state:
+    st.session_state["cookie_bootstrap"] = 0
+    
+# restore cookie login (2-pass)
 if not st.session_state.get("user"):
     u = auth.restore_user_from_cookie()
     if u:
         st.session_state["user"] = u
         st.session_state["workspace"] = auth.set_active_workspace(u)
+    else:
+        # CookieManager pode não estar pronto no 1º run após refresh
+        if st.session_state["cookie_bootstrap"] < 1:
+            st.session_state["cookie_bootstrap"] += 1
+            st.rerun()
 
 # idle timeout
 auth.idle_guard()
