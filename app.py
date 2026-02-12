@@ -123,6 +123,7 @@ def _restore_session_from_cookie():
         _clear_session_cookie()
         return
     st.session_state["user"] = u
+                    _set_login_cookie(u)
     st.session_state["last_activity"] = time.time()
 
 # ---------- providers ----------
@@ -147,7 +148,20 @@ def logout():
     st.rerun()
 
 def require_login():
-    if not st.session_state.get("user"):
+    # Try restore user session from signed cookie (survives browser refresh)
+if not st.session_state.get("user") and _cookie_manager is not None:
+    tok = _cookie_manager.get("content_os_session")
+    if tok:
+        data = _parse_session_token(tok)
+        if data:
+            _u = fetchone("SELECT * FROM users WHERE id=?", (int(data["uid"]),))
+            if _u and _u.get("is_active"):
+                st.session_state["user"] = _u
+                wss = get_user_workspaces(_u["id"])
+                if wss:
+                    set_active_workspace(wss[0]["id"])
+
+if not st.session_state.get("user"):
         login_ui()
         st.stop()
 
