@@ -155,7 +155,10 @@ def login_ui():
                 st.error("Token inválido, expirado ou já utilizado.")
 
 def workspace_sidebar():
-    user = st.session_state["user"]
+    user = st.session_state.get("user")
+    if not user:
+        return
+
     wss = db.list_user_workspaces(int(user["id"]))
 
     st.sidebar.markdown("### Painel (Workspace)")
@@ -172,74 +175,55 @@ def workspace_sidebar():
             st.session_state["workspace_id"] = wid
             st.session_state["workspace_name"] = new_name.strip()
             st.rerun()
+        return
 
-
-    labels = [f"#{w['id']} — {w['name']} ({w['role']})" for w in wss]
     # pick current
     current_id = st.session_state.get("workspace_id")
     idx = 0
     if current_id:
-        for i,w in enumerate(wss):
+        for i, w in enumerate(wss):
             if int(w["id"]) == int(current_id):
                 idx = i
                 break
-    sel = st.sidebar.selectbox("Escolha", labels, index=idx)
-    wid = int(sel.split("—")[0].strip().replace("#",""))
-    wname = sel.split("—",1)[1].split("(")[0].strip()
+
+    sel_ws = st.sidebar.selectbox(
+        "Escolha",
+        wss,
+        index=idx,
+        format_func=lambda w: f"#{w['id']} - {w['name']} ({w['role']})",
+    )
+
+    wid = int(sel_ws["id"])
+    wname = sel_ws["name"].strip()
     st.session_state["workspace_id"] = wid
     st.session_state["workspace_name"] = wname
 
     mem = db.get_membership(int(user["id"]), wid)
-    role = (mem or {}).get("role","viewer")
+    role = (mem or {}).get("role", "viewer")
     st.session_state["workspace_role"] = role
+
     if role == "owner":
         with st.sidebar.expander("👥 Convidar pessoas", expanded=False):
             invited_email = st.text_input("Email (opcional)", key="inv_email")
-            inv_role = st.selectbox("Papel", ["viewer","editor","owner"], index=1, key="inv_role")
+            inv_role = st.selectbox("Papel", ["viewer", "editor", "owner"], index=1, key="inv_role")
             exp_days = st.number_input("Expira em (dias)", min_value=1, max_value=90, value=7, step=1, key="inv_exp")
-            if st.button("Gerar convite", use_container_width=True, key="gen_inv"):
-                token = db.create_invite(workspace_id=wid, invited_email=invited_email, role=inv_role, expires_in_days=int(exp_days))
+            if st.button("Gerar convite", use_container_width=True, key="gen_invite"):
+                token = db.create_invite(
+                    workspace_id=wid,
+                    created_by=int(user["id"]),
+                    role=inv_role,
+                    invited_email=(invited_email.strip().lower() if invited_email else None),
+                    expires_in_days=int(exp_days),
+                )
                 try:
-                    db.log_event(int(user["id"]), int(wid), "invite_created", "invite", None, {"invited_email": invited_email, "role": inv_role, "expires_days": int(exp_days)})
+                    db.log_event(int(user["id"]), wid, "invite_created", "invite", None, {"role": inv_role, "expires_days": int(exp_days), "email": invited_email or None})
                 except Exception:
                     pass
-                st.success("Convite criado. Copie e envie este token:")
-                st.code(token)
+                st.success("Convite gerado. Copie e envie o token abaixo:")
+                st.code(token, language="text")
 
 
-    if role == "owner":
-        with st.sidebar.expander("🔐 Gerenciar membros", expanded=False):
-            members = db.list_workspace_members(wid)
-            for m in members:
-                cols = st.columns([4,2,1])
-                with cols[0]:
-                    st.write(f"{m.get('email','')}  ")
-                    if m.get("name"):
-                        st.caption(m.get("name"))
-                with cols[1]:
-                    if int(m.get("user_id")) == int(user["id"]):
-                        st.caption(f"Seu papel: **{m.get('role')}**")
-                    else:
-                        new_role = st.selectbox("Papel", ["viewer","editor","owner"], index=["viewer","editor","owner"].index(m.get("role","viewer")) if m.get("role","viewer") in ["viewer","editor","owner"] else 0, key=f"memrole_{m['user_id']}")
-                        if st.button("Salvar", key=f"memsave_{m['user_id']}"):
-                            db.set_membership_role(wid, int(m["user_id"]), new_role)
-                            db.log_event(int(user["id"]), wid, "membership_role_updated", "membership", int(m["user_id"]), {"role": new_role})
-                            st.rerun()
-                with cols[2]:
-                    if int(m.get("user_id")) != int(user["id"]):
-                        if st.button("Remover", key=f"memrm_{m['user_id']}"):
-                            db.remove_membership(wid, int(m["user_id"]))
-                            db.log_event(int(user["id"]), wid, "membership_removed", "membership", int(m["user_id"]), {})
-                            st.rerun()
 
-    st.sidebar.divider()
-    st.sidebar.caption(f"Logado como: {user.get('email')}")
-    if st.sidebar.button("Sair"):
-        logout()
-
-# ---------- generation persistence ----------
-def _gen_key(workspace_id: int, client_id: int) -> str:
-    return f"last_gen::{workspace_id}::{client_id}"
 
 def set_last_generation(workspace_id: int, client_id: int, payload: dict):
     st.session_state[_gen_key(workspace_id, client_id)] = payload
@@ -587,9 +571,13 @@ elif page == "Gerador":
         if not vids:
             st.warning("Este cliente ainda não tem vídeos.")
         else:
-            vid_label = [f"#{v['id']} — {v['filename']} ({v['created_at']})" for v in vids]
-            sel_vid = st.selectbox("Escolha um vídeo", vid_label, index=0)
-            vid_id = int(sel_vid.split("—")[0].strip().replace("#",""))
+            sel_v = st.selectbox(
+                "Escolha um vídeo",
+                vids,
+                index=0,
+                format_func=lambda v: f"#{v['id']} - {v['filename']} ({v.get('created_at','')})",
+            )
+            vid_id = int(sel_v["id"])
             trans = db.list_transcriptions_for_video(WORKSPACE_ID, vid_id)
             if not trans:
                 st.warning("Vídeo ainda não foi transcrito. Vá em **Vídeos** e transcreva.")
@@ -683,14 +671,18 @@ elif page == "Vídeos":
     vids = db.list_videos(WORKSPACE_ID, current_client["id"])
     if not vids:
         st.info("Nenhum vídeo cadastrado ainda.")
-
+        return
 
     left, right = st.columns([1,2])
     with left:
         st.markdown("### Biblioteca")
-        labels = [f"#{v['id']} — {v['filename']}" for v in vids]
-        sel = st.radio("Selecione um vídeo", labels, index=0)
-        video_id = int(sel.split("—")[0].strip().replace("#",""))
+        sel_v = st.radio(
+            "Selecione um vídeo",
+            vids,
+            index=0,
+            format_func=lambda v: f"#{v['id']} - {v['filename']}",
+        )
+        video_id = int(sel_v["id"])
 
     v = db.get_video(WORKSPACE_ID, video_id)
     trans = db.list_transcriptions_for_video(WORKSPACE_ID, video_id)
