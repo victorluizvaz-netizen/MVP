@@ -123,7 +123,7 @@ def _restore_session_from_cookie():
         _clear_session_cookie()
         return
     st.session_state["user"] = u
-                    _set_login_cookie(u)
+    _set_login_cookie(u)
     st.session_state["last_activity"] = time.time()
 
 # ---------- providers ----------
