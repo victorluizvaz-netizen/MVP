@@ -1,6 +1,5 @@
-streamlit
-openai-whisper
-groq
-setuptools-rust
-extra-streamlit-components>=0.1.60
-streamlit-autorefresh>=1.0.1
+streamlit>=1.32
+groq>=0.9.0
+openai-whisper>=202311
+ffmpeg-python>=0.2.0
+python-dotenv>=1.0.1
