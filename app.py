@@ -671,7 +671,7 @@ elif page == "Vídeos":
     vids = db.list_videos(WORKSPACE_ID, current_client["id"])
     if not vids:
         st.info("Nenhum vídeo cadastrado ainda.")
-        return
+        st.stop()  # stop because no videos
 
     left, right = st.columns([1,2])
     with left:
