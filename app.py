@@ -1,9 +1,24 @@
 
 import json
+import os
+import time
+import base64
+import hmac
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+
+# Optional helpers for auth persistence + idle timeout
+try:
+    import extra_streamlit_components as stx
+except Exception:
+    stx = None
+try:
+    from streamlit_autorefresh import st_autorefresh
+except Exception:
+    st_autorefresh = None
 
 from app import db
 from app.providers.groq_provider import GroqProvider
@@ -22,6 +37,8 @@ for _k, _v in {
     "workspace_name": None,
     "workspace_role": None,
     "last_generation": None,
+    "last_activity": None,
+    "last_autorefresh_count": None,
 }.items():
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -36,6 +53,78 @@ except Exception:
     pass
 
 
+
+# ---------- session persistence (cookie) ----------
+COOKIE_NAME = "content_os_session"
+
+def _get_session_secret() -> str:
+    key = os.environ.get("SESSION_SECRET")
+    if (not key) and hasattr(st, "secrets"):
+        key = st.secrets.get("SESSION_SECRET", None)
+    if not key:
+        # fallback (tokens will reset if process restarts)
+        key = "dev-secret"
+    return str(key)
+
+def _sign(data: str) -> str:
+    secret = _get_session_secret().encode("utf-8")
+    return hmac.new(secret, data.encode("utf-8"), hashlib.sha256).hexdigest()
+
+def _make_token(payload: dict) -> str:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+    b = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("utf-8").rstrip("=")
+    sig = _sign(b)
+    return f"{b}.{sig}"
+
+def _read_token(token: str):
+    try:
+        b, sig = token.split(".", 1)
+        if not hmac.compare_digest(_sign(b), sig):
+            return None
+        raw = base64.urlsafe_b64decode(b + "===").decode("utf-8")
+        payload = json.loads(raw)
+        if int(payload.get("exp", 0)) < int(time.time()):
+            return None
+        return payload
+    except Exception:
+        return None
+
+_cookie = stx.CookieManager() if stx else None
+
+def _set_session_cookie(user: dict):
+    if not _cookie:
+        return
+    payload = {"uid": int(user["id"]), "email": user["email"], "exp": int(time.time()) + 60*60*24*30}
+    _cookie.set(COOKIE_NAME, _make_token(payload), max_age=60*60*24*30)
+
+def _clear_session_cookie():
+    if not _cookie:
+        return
+    try:
+        _cookie.delete(COOKIE_NAME)
+    except Exception:
+        try:
+            _cookie.set(COOKIE_NAME, "", max_age=0)
+        except Exception:
+            pass
+
+def _restore_session_from_cookie():
+    if st.session_state.get("user") or (not _cookie):
+        return
+    token = _cookie.get(COOKIE_NAME)
+    if not token:
+        return
+    payload = _read_token(token)
+    if not payload:
+        _clear_session_cookie()
+        return
+    u = db.get_user_by_email(payload.get("email",""))
+    if not u or int(u.get("is_active", 1)) == 0:
+        _clear_session_cookie()
+        return
+    st.session_state["user"] = u
+    st.session_state["last_activity"] = time.time()
+
 # ---------- providers ----------
 providers = {}
 try:
@@ -46,12 +135,14 @@ except Exception as e:
 def provider_ready():
     if "groq" not in providers:
         st.error("Groq indisponível: " + str(providers.get("groq_error", "sem detalhes")))
+        st.stop()
 
     return providers["groq"]
 
 # ---------- auth/session helpers ----------
 def logout():
-    for k in ["user", "workspace_id", "workspace_name"]:
+    _clear_session_cookie()
+    for k in ["user", "workspace_id", "workspace_name", "workspace_role", "last_generation", "last_activity"]:
         st.session_state.pop(k, None)
     st.rerun()
 
@@ -84,6 +175,8 @@ def login_ui():
                 st.warning("Sua conta ainda não foi aprovada pelo administrador.")
             else:
                 st.session_state["user"] = u
+                st.session_state["last_activity"] = time.time()
+                _set_session_cookie(u)
                 try:
                     db.log_event(int(u["id"]), None, "login", "user", int(u["id"]), {})
                 except Exception:
@@ -283,9 +376,30 @@ def require_owner():
 
 
 # ---------- auth gate ----------
+_restore_session_from_cookie()
+
 if not st.session_state.get("user"):
     login_ui()
     st.stop()
+
+
+# ---------- idle timeout (5 min) ----------
+# Streamlit doesn’t capture mouse movement; we use a light autorefresh to enforce inactivity logout.
+if st.session_state.get("user") and st_autorefresh:
+    _count = st_autorefresh(interval=30_000, key="idle_autorefresh")
+    now = time.time()
+    last = st.session_state.get("last_activity") or now
+    last_count = st.session_state.get("last_autorefresh_count")
+
+    # Only update last_activity on user-triggered reruns (autorefresh count unchanged on clicks/forms)
+    if last_count is None or _count == last_count:
+        st.session_state["last_activity"] = now
+        last = now
+    st.session_state["last_autorefresh_count"] = _count
+
+    if (now - last) > 300:
+        st.warning("Sessão expirada por inatividade (5 min). Faça login novamente.")
+        logout()
 
 
 workspace_sidebar()
@@ -306,7 +420,7 @@ clients = db.list_clients(WORKSPACE_ID)
 client_names = ["— selecione —"] + [c["name"] for c in clients]
 name_to_id = {c["name"]: c["id"] for c in clients}
 
-sel_client_name = st.sidebar.selectbox("Cliente", client_names, index=0)
+sel_client_name = st.sidebar.selectbox("Cliente", client_names, index=0, key="sidebar_client_name")
 current_client = None
 if sel_client_name != "— selecione —":
     current_client = db.get_client(WORKSPACE_ID, int(name_to_id[sel_client_name]))
@@ -527,13 +641,17 @@ elif page == "Clientes":
                 else:
                     try:
                         db.upsert_client(name=name, description=desc, profile=new_profile, workspace_id=WORKSPACE_ID, client_id=cid)
-                        st.success("Salvo! Recarregue (F5) para atualizar o seletor de cliente.")
+                        st.success("Salvo!")
+                        st.session_state["sidebar_client_name"] = name.strip()
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Erro ao salvar: {e}")
         with colS2:
             if cid is not None and st.button("🗑️ Excluir cliente", use_container_width=True):
                 db.delete_client(WORKSPACE_ID, cid)
-                st.warning("Cliente excluído. Recarregue (F5).")
+                st.warning("Cliente excluído.")
+                st.session_state["sidebar_client_name"] = "— selecione —"
+                st.rerun()
 
     with tab2:
         st.subheader("Clientes cadastrados")
@@ -582,9 +700,13 @@ elif page == "Gerador":
             if not trans:
                 st.warning("Vídeo ainda não foi transcrito. Vá em **Vídeos** e transcreva.")
             else:
-                tlabel = [f"Transcrição #{t['id']} ({t['created_at']})" for t in trans]
-                sel_t = st.selectbox("Escolha a transcrição", tlabel, index=0)
-                transcription_id = int(sel_t.split("#")[1].split()[0])
+                sel_t = st.selectbox(
+                    "Escolha a transcrição",
+                    trans,
+                    index=0,
+                    format_func=lambda t: f"#{t['id']} ({t.get('created_at','')})",
+                )
+                transcription_id = int(sel_t["id"])
                 t = db.get_transcription(WORKSPACE_ID, transcription_id)
                 input_text = (t or {}).get("text","")
                 with st.expander("Ver transcrição", expanded=False):

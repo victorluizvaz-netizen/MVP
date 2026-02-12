@@ -2,3 +2,5 @@ streamlit
 openai-whisper
 groq
 setuptools-rust
+extra-streamlit-components>=0.1.60
+streamlit-autorefresh>=1.0.1
