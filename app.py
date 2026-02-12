@@ -15,6 +15,18 @@ VIDEOS_DIR = APP_STORAGE / "videos"
 
 st.set_page_config(page_title="Content OS (Whisper + Groq)", layout="wide")
 
+# ---------- session state defaults ----------
+for _k, _v in {
+    "user": None,
+    "workspace_id": None,
+    "workspace_name": None,
+    "workspace_role": None,
+    "last_generation": None,
+}.items():
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
 # ---------- init ----------
 db.init_db()
 # Create initial admin if configured via env vars
@@ -289,6 +301,7 @@ def require_owner():
 # ---------- auth gate ----------
 if not st.session_state.get("user"):
     login_ui()
+    st.stop()
 
 
 workspace_sidebar()
