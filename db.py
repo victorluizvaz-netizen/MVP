@@ -2,16 +2,17 @@ import os
 import sqlite3
 from typing import Optional, List
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+def _get_database_url() -> str:
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        try:
+            import streamlit as st
+            url = str(st.secrets.get("DATABASE_URL", "")).strip()
+        except Exception:
+            url = ""
+    return url
 
-# Streamlit Cloud: secrets ficam em st.secrets
-try:
-    import streamlit as st
-    if not DATABASE_URL and hasattr(st, "secrets"):
-        DATABASE_URL = str(st.secrets.get("DATABASE_URL", "")).strip()
-except Exception:
-    pass
-
+DATABASE_URL = _get_database_url()
 DB_PATH = os.environ.get("CONTENT_OS_DB", "content_os.db")
 
 _IS_PG = bool(DATABASE_URL)
@@ -22,6 +23,7 @@ if _IS_PG:
 
 
 
+
 def _adapt_sql(sql: str) -> str:
     """Converte placeholders '?' (sqlite) para '%s' (postgres)."""
     if _IS_PG:
@@ -29,13 +31,29 @@ def _adapt_sql(sql: str) -> str:
     return sql
 
 
-def db():
-    if _IS_PG:
-        # autocommit = True pra simplificar exec_sql
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+import os
+import sqlite3
+from typing import Optional, List
+
+def _get_database_url() -> str:
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        try:
+            import streamlit as st
+            url = str(st.secrets.get("DATABASE_URL", "")).strip()
+        except Exception:
+            url = ""
+    return url
+
+DATABASE_URL = _get_database_url()
+DB_PATH = os.environ.get("CONTENT_OS_DB", "content_os.db")
+
+_IS_PG = bool(DATABASE_URL)
+
+if _IS_PG:
+    import psycopg
+    from psycopg.rows import dict_row
+
 
 
 def exec_sql(sql: str, params: tuple = ()) -> None:
