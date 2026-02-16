@@ -22,38 +22,18 @@ if _IS_PG:
     from psycopg.rows import dict_row
 
 
-
-
 def _adapt_sql(sql: str) -> str:
-    """Converte placeholders '?' (sqlite) para '%s' (postgres)."""
+    # Converte placeholders do SQLite (?) para Postgres (%s)
+    return sql.replace("?", "%s") if _IS_PG else sql
+
+
+def db():
+    """Retorna uma conexão válida (Postgres se DATABASE_URL existir, senão SQLite)."""
     if _IS_PG:
-        return sql.replace("?", "%s")
-    return sql
-
-
-import os
-import sqlite3
-from typing import Optional, List
-
-def _get_database_url() -> str:
-    url = os.environ.get("DATABASE_URL", "").strip()
-    if not url:
-        try:
-            import streamlit as st
-            url = str(st.secrets.get("DATABASE_URL", "")).strip()
-        except Exception:
-            url = ""
-    return url
-
-DATABASE_URL = _get_database_url()
-DB_PATH = os.environ.get("CONTENT_OS_DB", "content_os.db")
-
-_IS_PG = bool(DATABASE_URL)
-
-if _IS_PG:
-    import psycopg
-    from psycopg.rows import dict_row
-
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def exec_sql(sql: str, params: tuple = ()) -> None:
@@ -232,7 +212,7 @@ def init_db():
         """)
         return
 
-    # SQLite schema (como estava)
+    # SQLite schema
     exec_sql("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
