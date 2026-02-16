@@ -1,8 +1,17 @@
 import os
 import sqlite3
-from typing import Optional, List, Any, Tuple
+from typing import Optional, List
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+# Streamlit Cloud: secrets ficam em st.secrets
+try:
+    import streamlit as st
+    if not DATABASE_URL and hasattr(st, "secrets"):
+        DATABASE_URL = str(st.secrets.get("DATABASE_URL", "")).strip()
+except Exception:
+    pass
+
 DB_PATH = os.environ.get("CONTENT_OS_DB", "content_os.db")
 
 _IS_PG = bool(DATABASE_URL)
@@ -10,6 +19,7 @@ _IS_PG = bool(DATABASE_URL)
 if _IS_PG:
     import psycopg
     from psycopg.rows import dict_row
+
 
 
 def _adapt_sql(sql: str) -> str:
